@@ -1,0 +1,23 @@
+{
+  "name": "webtemplates",
+  "version": "0.1.0",
+  "description": "CLI scaffolder for high-end interactive web templates (Disect, Inspect, Minimalist). Built for Claude Code orchestration.",
+  "type": "module",
+  "bin": {
+    "webtemplates": "./bin/wt.js"
+  },
+  "scripts": {
+    "wt": "node ./bin/wt.js",
+    "link": "npm link"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.7.0",
+    "execa": "^9.3.0",
+    "fs-extra": "^11.2.0",
+    "picocolors": "^1.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
