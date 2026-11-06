@@ -4,32 +4,31 @@
 
 This repo is a CLI-based scaffolding engine.
 
-1. You run the CLI and select a template (e.g., `disect-breakdown`).
-2. The CLI creates a new Vite + React project, installs the required heavy-lifting
-   libraries (Three.js, GSAP, Framer Motion), and drops a `template-config.json`
-   and a `SKILL.md` file into the new folder.
-3. **You do not write the React code manually.** You open the new folder in your
-   terminal, type `claude`, and tell it: *"Build the site based on the SKILL.md and
-   template-config.json"*. Claude Code reads the design contract and generates the
-   complex 3D/scroll code for you.
+1. You run `webtemplates new` and pick a template (e.g., `disect-breakdown`).
+2. The CLI asks for the project name, brand name, and three palette colours, then
+   creates a Vite + React project, installs the template's libraries (Three.js, GSAP,
+   Framer Motion), copies the template's `SKILL.md` into `.claude/skills/`, copies any
+   prepackaged assets, and writes `template-config.json`.
+3. **You do not write the React code manually.** Open the new folder, type `claude`,
+   and tell it: *"Build the site based on the SKILL.md and template-config.json"*.
+
+Day-to-day usage lives in **`QUICKSTART.md`**; scenario walkthroughs live in
+**`USE-CASES.md`**.
 
 ---
 
-## Phase 1: Finish the CLI Code (Series 4)
+## Phase 1: The CLI Code (complete)
 
-*Status: done. Both files below are already in this repo and wired together.*
+```
+bin/wt.js                          # shebang entry, calls run()
+src/index.js                       # arg parsing, prompts, spinner
+src/templates.js                   # discovers skills/*/SKILL.md, parses frontmatter
+src/generators/shared/scaffold.js  # Vite + deps + skill + assets + config
+```
 
-### File 1: `src/generators/shared/scaffold.js`
+### `src/generators/shared/scaffold.js`
 
 ```javascript
-import { execa } from 'execa';
-import fs from 'fs-extra';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-// Package root (this file lives at <root>/src/generators/shared/scaffold.js).
-// Skills must resolve from the installed package, not from the user's cwd,
-// otherwise `webtemplates new` fails when run outside this repo.
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
 const TEMPLATE_DEPS = {
@@ -38,45 +37,48 @@ const TEMPLATE_DEPS = {
   'bold-minimalist-brand': ['framer-motion', 'lenis', 'gsap'],
 };
 
-export async function scaffoldProject(projectName, templateId) {
+export const DEFAULT_PALETTE = { bg: '#faf9f7', fg: '#111111', accent: '#e63946' };
+export const DEFAULT_SEGMENTS = { hero: 'editorial-center', motion_profile: 'restrained' };
+
+export async function scaffoldProject(projectName, templateId, options = {}) {
   const targetDir = path.resolve(process.cwd(), projectName);
+  const brand = options.brand ?? {};
+  const palette = brand.palette ?? {};
 
   if (fs.existsSync(targetDir)) {
     throw new Error('Directory already exists: ' + projectName);
   }
 
-  // 1. Create Vite project
   await execa('npm', ['create', 'vite@latest', projectName, '--', '--template', 'react'], { stdio: 'inherit' });
-
-  // 2. Install base dependencies
   await execa('npm', ['install'], { cwd: targetDir, stdio: 'inherit' });
 
-  // 3. Install template-specific dependencies
   const deps = TEMPLATE_DEPS[templateId] ?? [];
   if (deps.length > 0) {
     await execa('npm', ['install', ...deps], { cwd: targetDir, stdio: 'inherit' });
   }
 
-  // 4. Copy SKILL.md to the new project so Claude Code can read it
   const skillSrc = path.join(packageRoot, 'skills', templateId, 'SKILL.md');
-  if (!fs.existsSync(skillSrc)) {
-    throw new Error('Skill not found: ' + skillSrc);
-  }
+  if (!fs.existsSync(skillSrc)) throw new Error('Skill not found: ' + skillSrc);
   const skillDestDir = path.resolve(targetDir, '.claude', 'skills', templateId);
   await fs.ensureDir(skillDestDir);
   await fs.copy(skillSrc, path.join(skillDestDir, 'SKILL.md'));
 
-  // 5. Create template-config.json for brand customization
+  const assetsSrc = path.join(packageRoot, 'skills', templateId, 'assets');
+  if (fs.existsSync(assetsSrc)) {
+    await fs.copy(assetsSrc, path.join(targetDir, 'public', 'assets'));
+  }
+
   const config = {
     template: templateId,
     brand: {
-      name: projectName,
-      palette: { bg: '#faf9f7', fg: '#111111', accent: '#e63946' }
+      name: brand.name || projectName,
+      palette: {
+        bg: palette.bg || DEFAULT_PALETTE.bg,
+        fg: palette.fg || DEFAULT_PALETTE.fg,
+        accent: palette.accent || DEFAULT_PALETTE.accent,
+      },
     },
-    segments: {
-      hero: 'editorial-center',
-      motion_profile: 'restrained'
-    }
+    segments: { ...DEFAULT_SEGMENTS, ...(options.segments ?? {}) },
   };
   await fs.writeJson(path.join(targetDir, 'template-config.json'), config, { spaces: 2 });
 
@@ -84,102 +86,84 @@ export async function scaffoldProject(projectName, templateId) {
 }
 ```
 
-### File 2: `src/index.js`
+### `src/index.js`
 
-The `new` branch ends by calling the generator inside a spinner:
+Beyond the original argument handling, the `new` flow now asks for brand tokens
+before scaffolding:
 
 ```javascript
-const s = p.spinner();
-s.start('Scaffolding project (this may take a minute)...');
+const brandName = await askText({ message: 'Brand name?', placeholder: projectName });
+if (brandName === null) return;                    // null means Ctrl+C
 
-try {
-  await scaffoldProject(projectName, template);
-  s.stop('Project generated successfully!');
-  p.outro(pc.green('To start the dev server:\n  cd ' + projectName + '\n  npm run dev'));
-} catch (err) {
-  s.stop('Failed to generate project.');
-  p.cancel(err.message);
-}
+const bg = await askText({
+  message: 'Background colour (hex, Enter for default)',
+  placeholder: DEFAULT_PALETTE.bg,
+  validate: optionalHex,                            // empty allowed, bad hex rejected
+});
+if (bg === null) return;
+// ...foreground and accent follow the same pattern
+
+const brand = {
+  name: brandName || projectName,
+  palette: {
+    bg: normalizeHex(bg) || DEFAULT_PALETTE.bg,
+    fg: normalizeHex(fg) || DEFAULT_PALETTE.fg,
+    accent: normalizeHex(accent) || DEFAULT_PALETTE.accent,
+  },
+};
+
+await scaffoldProject(projectName, template, { brand });
 ```
+
+`normalizeHex` accepts `#faf9f7`, `faf9f7`, and `#fff` (expanded to `#ffffff`), and
+returns `null` for anything else. `isHexColor` is exported so the prompt validator and
+any future code share one rule.
 
 ---
 
 ## Phase 2: Global Installation
 
-Link the CLI so you can run `webtemplates` from any directory, not just inside this repo.
-
-```powershell
-# Make the CLI global
-npm link
-
-# Commit your progress
-git add .
-git commit -m "feat(cli): complete generator engine and CLI logic"
+```bash
+npm install     # once
+npm link        # puts `webtemplates` on PATH
 ```
 
-Run these from the `WebTemplates` root folder.
+`npm link` symlinks the package, so later edits to this repo take effect immediately.
 
 ---
 
 ## Phase 3: The $10k Site Workflow
 
-### Step 1: Generate the Project
+1. **Generate:** `cd` to the client folder, then `webtemplates new`. Pick a template,
+   name the project, enter the brand name and three hex colours. Wait 30–60 seconds.
+2. **Review:** open `template-config.json`. Fix the palette if the client sent new
+   guidelines — everything brand-specific is in this one file.
+3. **Build:** `cd <project> && claude`, then paste:
 
-Navigate to the folder where you want the client's site to live
-(e.g., `cd C:\Users\there\Desktop\Clients`), and run:
+   > *"Read the design contract in `.claude/skills/` and the branding tokens in
+   > `template-config.json`. Then write the React components for this project.
+   > Implement the full scene and scroll logic described in the SKILL.md file.
+   > Ensure you install any missing dependencies."*
 
-```powershell
-webtemplates new
-```
-
-1. Select a template.
-2. Name the project (e.g., `nike-teardown`).
-3. Wait for the spinner to finish.
-
-### Step 2: Customize the Brand (Without Claude)
-
-Open the newly created folder. You will see a `template-config.json` file. Open it
-in Notepad and change the `bg`, `fg`, and `accent` hex codes to match the client's
-brand guidelines.
-
-### Step 3: Let Claude Build the React App
-
-1. Navigate into the new project folder: `cd nike-teardown`
-2. Launch Claude Code: `claude`
-3. Paste this prompt into Claude:
-
-> *"Read the design contract in `.claude/skills/` and the branding tokens in
-> `template-config.json`. Then, write the React components for this project.
-> Implement the full scene and scroll logic described in the SKILL.md file.
-> Ensure you install any missing dependencies."*
-
-Claude Code will read the `SKILL.md`, look at the `template-config.json` to get the
-client's colors, and write all the complex Three.js, GSAP, and React code for you.
+4. **Run:** `npm run dev`, and `npm run build` before handoff.
 
 ---
 
-## Phase 4: Next Steps (Future Expansions)
+## Phase 4: What's Implemented, What's Next
 
-Now that you have a working v1, here is how you can expand this engine later.
+Done:
 
-1. **Add an Asset Copier:** Update `scaffold.js` to copy a `public/assets` folder
-   if you want to pre-load fonts or 3D models.
-2. **Advanced Prompts:** Update `src/index.js` to ask the user for their brand colors
-   during the CLI flow, and write those directly into the `template-config.json` so
-   Claude doesn't have to guess.
-3. **Add a 4th Template:** Just create a new folder in `skills/` with a `SKILL.md`,
-   and the CLI will automatically detect it and list it in the menu! (No code changes
-   required.)
+- **Asset copier** — `skills/<template-id>/assets/` is copied to `public/assets/` on
+  every generation; templates without the folder are untouched.
+- **Brand prompts** — the CLI writes the client's name and palette into
+  `template-config.json` so Claude never guesses colours.
 
----
+Next:
 
-## Notes / Corrections Applied
-
-- **Skill source path:** the original `scaffold.js` read the skill from
-  `process.cwd()/skills/<id>/SKILL.md`. That works only when you run the CLI from
-  inside this repo. After `npm link`, `cwd` is the client folder, so the copy would
-  throw `ENOENT`. It now resolves `skills/` from the package root via
-  `import.meta.url`. `targetDir` still resolves against `cwd`, so projects are
-  created wherever you run the command.
-- **Dependency map:** template → packages lives in one `TEMPLATE_DEPS` object
-  instead of a chain of `if` statements.
+1. **Segment prompts** — ask for `hero` and `motion_profile` too, instead of always
+   writing the defaults in `DEFAULT_SEGMENTS`.
+2. **`webtemplates add <template>`** — drop a skill contract into an existing project
+   without regenerating the Vite app.
+3. **Add a 4th template** — create `skills/<new-id>/SKILL.md`. The CLI detects it and
+   lists it automatically; no code changes. Add an entry to `TEMPLATE_DEPS` only if it
+   needs packages beyond Vite + React.

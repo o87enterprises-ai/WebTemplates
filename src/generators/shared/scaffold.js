@@ -14,8 +14,21 @@ const TEMPLATE_DEPS = {
   'bold-minimalist-brand': ['framer-motion', 'lenis', 'gsap'],
 };
 
-export async function scaffoldProject(projectName, templateId) {
+export const DEFAULT_PALETTE = {
+  bg: '#faf9f7',
+  fg: '#111111',
+  accent: '#e63946',
+};
+
+export const DEFAULT_SEGMENTS = {
+  hero: 'editorial-center',
+  motion_profile: 'restrained',
+};
+
+export async function scaffoldProject(projectName, templateId, options = {}) {
   const targetDir = path.resolve(process.cwd(), projectName);
+  const brand = options.brand ?? {};
+  const palette = brand.palette ?? {};
 
   if (fs.existsSync(targetDir)) {
     throw new Error('Directory already exists: ' + projectName);
@@ -42,17 +55,26 @@ export async function scaffoldProject(projectName, templateId) {
   await fs.ensureDir(skillDestDir);
   await fs.copy(skillSrc, path.join(skillDestDir, 'SKILL.md'));
 
-  // 5. Create template-config.json for brand customization
+  // 5. Copy the template's prepackaged assets (fonts, models, textures).
+  //    Drop files in skills/<template-id>/assets/ to have them pre-loaded;
+  //    templates without that folder simply skip this step.
+  const assetsSrc = path.join(packageRoot, 'skills', templateId, 'assets');
+  if (fs.existsSync(assetsSrc)) {
+    await fs.copy(assetsSrc, path.join(targetDir, 'public', 'assets'));
+  }
+
+  // 6. Create template-config.json for brand customization
   const config = {
     template: templateId,
     brand: {
-      name: projectName,
-      palette: { bg: '#faf9f7', fg: '#111111', accent: '#e63946' }
+      name: brand.name || projectName,
+      palette: {
+        bg: palette.bg || DEFAULT_PALETTE.bg,
+        fg: palette.fg || DEFAULT_PALETTE.fg,
+        accent: palette.accent || DEFAULT_PALETTE.accent,
+      },
     },
-    segments: {
-      hero: 'editorial-center',
-      motion_profile: 'restrained'
-    }
+    segments: { ...DEFAULT_SEGMENTS, ...(options.segments ?? {}) },
   };
   await fs.writeJson(path.join(targetDir, 'template-config.json'), config, { spaces: 2 });
 
